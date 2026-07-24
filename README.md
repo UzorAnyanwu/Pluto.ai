@@ -20,6 +20,13 @@ every major decision.
    AI orchestration and the voice pipeline's latency budget.
 5. [`docs/architecture/04-security-and-compliance.md`](./docs/architecture/04-security-and-compliance.md)
 6. [`docs/architecture/05-infra-and-observability.md`](./docs/architecture/05-infra-and-observability.md)
+7. [`docs/product/01-business-requirements.md`](./docs/product/01-business-requirements.md) —
+   personas, requirements, and the voice-first MVP scope decision.
+8. [`docs/product/02-user-flows.md`](./docs/product/02-user-flows.md) — onboarding, call, booking,
+   escalation, billing, and support-access flows.
+9. [`docs/product/03-technical-specifications.md`](./docs/product/03-technical-specifications.md) —
+   API conventions the implementation must follow.
+10. [`docs/api/openapi.yaml`](./docs/api/openapi.yaml) — the validated MVP API contract.
 
 ## Repository layout
 

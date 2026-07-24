@@ -1,0 +1,999 @@
+openapi: 3.0.3
+info:
+  title: Pluto AI — Core API
+  description: >
+    Public and internal API surface for `services/api-core`. Scoped to the MVP (Phase 2,
+    voice-first) surface defined in docs/product/01-business-requirements.md. Endpoints for
+    channels/features marked "Later" in that doc (WhatsApp, SMS, agency management, workflow
+    builder) are intentionally absent here and will be added as their own versioned additions,
+    not retrofitted into these contracts.
+  version: "1.0.0-mvp"
+  contact:
+    name: Pluto AI Engineering
+servers:
+  - url: https://api.pluto-ai.com/v1
+    description: Production
+  - url: https://api.staging.pluto-ai.com/v1
+    description: Staging
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Auth
+  - name: Businesses
+  - name: Team
+  - name: AI Agent Config
+  - name: Knowledge Base
+  - name: Calendar
+  - name: Bookings
+  - name: Customers
+  - name: Conversations
+  - name: Webhooks
+  - name: API Keys
+  - name: Billing
+
+paths:
+  # ---------------------------------------------------------------- Auth
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user and create their first business workspace
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, business_name, timezone]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password, minLength: 12 }
+                business_name: { type: string, minLength: 1, maxLength: 200 }
+                timezone: { type: string, description: "IANA timezone, e.g. America/New_York" }
+      responses:
+        "201":
+          description: Account and business created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthTokenPair"
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Authenticate with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        "200":
+          description: Authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthTokenPair" }
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Exchange a valid refresh token (httpOnly cookie) for a new access token
+      security: []
+      responses:
+        "200":
+          description: New access token issued; refresh token rotated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthTokenPair" }
+        "401":
+          description: Refresh token invalid, expired, or reuse detected (forces full logout)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Invalidate the current refresh token
+      responses:
+        "204": { description: Logged out }
+
+  # ---------------------------------------------------------------- Businesses
+  /businesses/me:
+    get:
+      tags: [Businesses]
+      summary: "Get the current user's business (MVP: one business per user)"
+      responses:
+        "200":
+          description: Business profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Business" }
+    patch:
+      tags: [Businesses]
+      summary: Update business profile (name, timezone, operating hours, industry)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BusinessUpdate" }
+      responses:
+        "200":
+          description: Updated business
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Business" }
+        "409":
+          description: Version conflict (optimistic concurrency — see data model doc §4)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /businesses/me/phone-number:
+    post:
+      tags: [Businesses]
+      summary: Provision a new Twilio number, or register call-forwarding for an existing number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: { type: string, enum: [provision_new, forward_existing] }
+                area_code: { type: string, description: "Required if mode=provision_new" }
+                existing_number: { type: string, description: "Required if mode=forward_existing, E.164 format" }
+      responses:
+        "201":
+          description: Phone number attached to the business
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PhoneNumber" }
+
+  # ---------------------------------------------------------------- Team
+  /businesses/me/team:
+    get:
+      tags: [Team]
+      summary: List team members
+      responses:
+        "200":
+          description: Team members
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TeamMember" }
+    post:
+      tags: [Team]
+      summary: Invite a team member
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, role]
+              properties:
+                email: { type: string, format: email }
+                role: { type: string, enum: [admin, staff, read_only] }
+      responses:
+        "201":
+          description: Invitation sent
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TeamMember" }
+
+  /businesses/me/team/{userId}:
+    patch:
+      tags: [Team]
+      summary: Change a team member's role
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, enum: [admin, staff, read_only] }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TeamMember" }
+        "403":
+          description: Cannot demote/remove the business owner
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      tags: [Team]
+      summary: Remove a team member
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "204": { description: Removed }
+        "403":
+          description: Cannot remove the business owner
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  # ---------------------------------------------------------------- AI Agent Config
+  /businesses/me/ai-agent-config:
+    get:
+      tags: [AI Agent Config]
+      summary: Get the active AI agent configuration
+      responses:
+        "200":
+          description: Current config
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AiAgentConfig" }
+    put:
+      tags: [AI Agent Config]
+      summary: Replace the AI agent configuration (creates a new version — see data model doc §4)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AiAgentConfigInput" }
+      responses:
+        "200":
+          description: New active config
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AiAgentConfig" }
+        "422":
+          description: Validation failed (e.g. referenced tool not in the tenant's enabled tool set)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /businesses/me/ai-agent-config/test-call:
+    post:
+      tags: [AI Agent Config]
+      summary: Trigger a test call to a phone number using the current (not-yet-live) draft config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone_number]
+              properties:
+                phone_number: { type: string, description: "E.164 format" }
+      responses:
+        "202":
+          description: Test call initiated; connect to conversation via WebSocket or poll conversation status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversation_id: { type: string, format: uuid }
+
+  # ---------------------------------------------------------------- Knowledge Base
+  /businesses/me/knowledge-sources:
+    get:
+      tags: [Knowledge Base]
+      summary: List knowledge sources and their indexing status
+      responses:
+        "200":
+          description: Knowledge sources
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/KnowledgeSource" }
+    post:
+      tags: [Knowledge Base]
+      summary: Add a knowledge source (file upload, URL, or manual text)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                type: { type: string, enum: [pdf, docx, csv, url, manual_text, faq] }
+                file: { type: string, format: binary, description: "Required if type is pdf/docx/csv" }
+                url: { type: string, format: uri, description: "Required if type=url" }
+                content: { type: string, description: "Required if type=manual_text or faq" }
+      responses:
+        "202":
+          description: Accepted for async indexing (see AI architecture doc §4)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/KnowledgeSource" }
+
+  /businesses/me/knowledge-sources/{sourceId}:
+    delete:
+      tags: [Knowledge Base]
+      summary: Remove a knowledge source and its indexed chunks
+      parameters:
+        - $ref: "#/components/parameters/SourceId"
+      responses:
+        "204": { description: Removed }
+
+  # ---------------------------------------------------------------- Calendar
+  /businesses/me/calendar-connections:
+    get:
+      tags: [Calendar]
+      summary: List connected calendars
+      responses:
+        "200":
+          description: Connections
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CalendarConnection" }
+
+  /businesses/me/calendar-connections/oauth/start:
+    post:
+      tags: [Calendar]
+      summary: Begin OAuth flow for a calendar provider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider]
+              properties:
+                provider: { type: string, enum: [google, outlook] }
+      responses:
+        "200":
+          description: Redirect URL for the OAuth consent screen
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authorization_url: { type: string, format: uri }
+
+  /businesses/me/calendar-connections/{connectionId}:
+    delete:
+      tags: [Calendar]
+      summary: Disconnect a calendar
+      parameters:
+        - $ref: "#/components/parameters/ConnectionId"
+      responses:
+        "204": { description: Disconnected }
+
+  # ---------------------------------------------------------------- Bookings
+  /businesses/me/bookings:
+    get:
+      tags: [Bookings]
+      summary: List bookings
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [confirmed, cancelled, completed, no_show] }
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          description: Paginated bookings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaginatedBookings" }
+    post:
+      tags: [Bookings]
+      summary: Create a booking manually (staff-initiated, not via the AI)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BookingInput" }
+      responses:
+        "201":
+          description: Booking created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Booking" }
+        "409":
+          description: Slot conflict detected against internal or external calendar
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /businesses/me/bookings/{bookingId}:
+    patch:
+      tags: [Bookings]
+      summary: Reschedule or update booking status
+      parameters:
+        - $ref: "#/components/parameters/BookingId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                start_at: { type: string, format: date-time }
+                status: { type: string, enum: [confirmed, cancelled, completed, no_show] }
+      responses:
+        "200":
+          description: Updated booking
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Booking" }
+
+  # ---------------------------------------------------------------- Customers (CRM)
+  /businesses/me/customers:
+    get:
+      tags: [Customers]
+      summary: List/search customers
+      parameters:
+        - name: q
+          in: query
+          description: Free-text search across name, phone, email
+          schema: { type: string }
+        - name: tag
+          in: query
+          schema: { type: string }
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          description: Paginated customers
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaginatedCustomers" }
+
+  /businesses/me/customers/{customerId}:
+    get:
+      tags: [Customers]
+      summary: Get a customer profile, including linked conversations and bookings
+      parameters:
+        - $ref: "#/components/parameters/CustomerId"
+      responses:
+        "200":
+          description: Customer detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerDetail" }
+    patch:
+      tags: [Customers]
+      summary: Update customer fields (tags, custom fields, name/email correction)
+      parameters:
+        - $ref: "#/components/parameters/CustomerId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tags: { type: array, items: { type: string } }
+                custom_fields: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerDetail" }
+
+  # ---------------------------------------------------------------- Conversations
+  /businesses/me/conversations:
+    get:
+      tags: [Conversations]
+      summary: List conversations (calls, and later other channels)
+      parameters:
+        - name: channel
+          in: query
+          schema: { type: string, enum: [voice, whatsapp, sms, web_chat, email] }
+        - name: status
+          in: query
+          schema: { type: string, enum: [active, completed, escalated] }
+        - name: sentiment
+          in: query
+          schema: { type: string, enum: [positive, neutral, negative] }
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          description: Paginated conversations
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaginatedConversations" }
+
+  /businesses/me/conversations/{conversationId}:
+    get:
+      tags: [Conversations]
+      summary: Get full conversation detail — transcript, summary, sentiment, tool calls, recording link
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Conversation detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConversationDetail" }
+
+  # ---------------------------------------------------------------- Webhooks
+  /businesses/me/webhooks:
+    get:
+      tags: [Webhooks]
+      summary: List configured webhooks
+      responses:
+        "200":
+          description: Webhooks
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Webhook" }
+    post:
+      tags: [Webhooks]
+      summary: Register a webhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_url, subscribed_events]
+              properties:
+                target_url: { type: string, format: uri }
+                subscribed_events:
+                  type: array
+                  items:
+                    type: string
+                    enum: [call.completed, booking.created, booking.cancelled, lead.qualified, conversation.escalated]
+      responses:
+        "201":
+          description: Webhook created (secret returned once, for HMAC verification — see security doc §7)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookWithSecret" }
+
+  /businesses/me/webhooks/{webhookId}:
+    delete:
+      tags: [Webhooks]
+      summary: Remove a webhook
+      parameters:
+        - $ref: "#/components/parameters/WebhookId"
+      responses:
+        "204": { description: Removed }
+
+  # ---------------------------------------------------------------- API Keys
+  /businesses/me/api-keys:
+    get:
+      tags: [API Keys]
+      summary: List API keys (never returns the raw secret — only prefix + metadata)
+      responses:
+        "200":
+          description: API keys
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ApiKey" }
+    post:
+      tags: [API Keys]
+      summary: Create an API key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, scopes]
+              properties:
+                name: { type: string }
+                scopes:
+                  type: array
+                  items: { type: string, enum: [read, write] }
+      responses:
+        "201":
+          description: Key created — raw secret returned once only
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiKeyWithSecret" }
+
+  /businesses/me/api-keys/{keyId}:
+    delete:
+      tags: [API Keys]
+      summary: Revoke an API key
+      parameters:
+        - $ref: "#/components/parameters/KeyId"
+      responses:
+        "204": { description: Revoked }
+
+  # ---------------------------------------------------------------- Billing
+  /businesses/me/billing/subscription:
+    get:
+      tags: [Billing]
+      summary: Get current subscription, plan, and usage against plan limits
+      responses:
+        "200":
+          description: Subscription status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Subscription" }
+
+  /businesses/me/billing/checkout-session:
+    post:
+      tags: [Billing]
+      summary: Create a Stripe Checkout session to start or change a subscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan_id]
+              properties:
+                plan_id: { type: string }
+      responses:
+        "200":
+          description: Checkout session URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  checkout_url: { type: string, format: uri }
+
+  /webhooks/stripe:
+    post:
+      tags: [Billing]
+      summary: Stripe webhook receiver (signature-verified — see security doc §7)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: Acknowledged }
+        "400": { description: Signature verification failed }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    SourceId:
+      name: sourceId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ConnectionId:
+      name: connectionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    BookingId:
+      name: bookingId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CustomerId:
+      name: customerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ConversationId:
+      name: conversationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    WebhookId:
+      name: webhookId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    KeyId:
+      name: keyId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PageParam:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSizeParam:
+      name: page_size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, description: "Machine-readable error code, e.g. VALIDATION_ERROR" }
+            message: { type: string }
+            details: { type: object, additionalProperties: true, nullable: true }
+            request_id: { type: string, description: "Correlates to the trace ID in logs/traces" }
+
+    AuthTokenPair:
+      type: object
+      properties:
+        access_token: { type: string }
+        expires_in: { type: integer, description: "Seconds until access_token expiry" }
+        user: { $ref: "#/components/schemas/UserSummary" }
+
+    UserSummary:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        role: { type: string, enum: [owner, admin, staff, read_only] }
+        business_id: { type: string, format: uuid }
+
+    Business:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        industry: { type: string, nullable: true }
+        timezone: { type: string }
+        operating_hours: { type: object, additionalProperties: true }
+        status: { type: string, enum: [trial, active, past_due, suspended] }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+
+    BusinessUpdate:
+      type: object
+      properties:
+        name: { type: string }
+        industry: { type: string }
+        timezone: { type: string }
+        operating_hours: { type: object, additionalProperties: true }
+        version: { type: integer, description: "Required — optimistic concurrency check" }
+
+    PhoneNumber:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        e164: { type: string }
+        mode: { type: string, enum: [provisioned, forwarded] }
+        verified: { type: boolean }
+
+    TeamMember:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        role: { type: string, enum: [owner, admin, staff, read_only] }
+        status: { type: string, enum: [invited, active] }
+        invited_at: { type: string, format: date-time }
+
+    AiAgentConfig:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer }
+        system_prompt: { type: string }
+        voice_id: { type: string }
+        language: { type: string, description: "BCP 47 tag, e.g. en-US" }
+        enabled_tools: { type: array, items: { type: string } }
+        escalation_rules: { $ref: "#/components/schemas/EscalationRules" }
+        updated_at: { type: string, format: date-time }
+
+    AiAgentConfigInput:
+      type: object
+      required: [system_prompt, voice_id, language]
+      properties:
+        system_prompt: { type: string, maxLength: 8000 }
+        voice_id: { type: string }
+        language: { type: string }
+        enabled_tools: { type: array, items: { type: string } }
+        escalation_rules: { $ref: "#/components/schemas/EscalationRules" }
+
+    EscalationRules:
+      type: object
+      properties:
+        always_escalate_intents: { type: array, items: { type: string } }
+        sentiment_threshold: { type: string, enum: [negative, very_negative] }
+        max_clarification_attempts: { type: integer, minimum: 1, default: 3 }
+        transfer_number: { type: string, nullable: true }
+
+    KnowledgeSource:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [pdf, docx, csv, url, manual_text, faq] }
+        status: { type: string, enum: [pending, indexing, ready, failed] }
+        failure_reason: { type: string, nullable: true }
+        chunk_count: { type: integer, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    CalendarConnection:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        provider: { type: string, enum: [google, outlook] }
+        sync_status: { type: string, enum: [connected, error, disconnected] }
+        connected_at: { type: string, format: date-time }
+
+    BookingInput:
+      type: object
+      required: [customer_id, service_id, start_at]
+      properties:
+        customer_id: { type: string, format: uuid }
+        service_id: { type: string, format: uuid }
+        employee_id: { type: string, format: uuid, nullable: true }
+        location_id: { type: string, format: uuid, nullable: true }
+        start_at: { type: string, format: date-time }
+
+    Booking:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        customer_id: { type: string, format: uuid }
+        service_id: { type: string, format: uuid }
+        employee_id: { type: string, format: uuid, nullable: true }
+        location_id: { type: string, format: uuid, nullable: true }
+        start_at: { type: string, format: date-time }
+        end_at: { type: string, format: date-time }
+        status: { type: string, enum: [confirmed, cancelled, completed, no_show] }
+        external_calendar_event_id: { type: string, nullable: true }
+        version: { type: integer }
+
+    PaginatedBookings:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Booking" } }
+        pagination: { $ref: "#/components/schemas/Pagination" }
+
+    Customer:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, nullable: true }
+        phone: { type: string, nullable: true }
+        email: { type: string, nullable: true }
+        tags: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }
+
+    CustomerDetail:
+      allOf:
+        - $ref: "#/components/schemas/Customer"
+        - type: object
+          properties:
+            custom_fields: { type: object, additionalProperties: true }
+            conversation_ids: { type: array, items: { type: string, format: uuid } }
+            booking_ids: { type: array, items: { type: string, format: uuid } }
+
+    PaginatedCustomers:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Customer" } }
+        pagination: { $ref: "#/components/schemas/Pagination" }
+
+    Conversation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        channel: { type: string, enum: [voice, whatsapp, sms, web_chat, email] }
+        customer_id: { type: string, format: uuid, nullable: true }
+        status: { type: string, enum: [active, completed, escalated] }
+        sentiment: { type: string, enum: [positive, neutral, negative], nullable: true }
+        summary: { type: string, nullable: true }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time, nullable: true }
+
+    ConversationDetail:
+      allOf:
+        - $ref: "#/components/schemas/Conversation"
+        - type: object
+          properties:
+            messages:
+              type: array
+              items: { $ref: "#/components/schemas/Message" }
+            recording_url: { type: string, format: uri, nullable: true }
+            extracted_fields: { type: object, additionalProperties: true, nullable: true }
+
+    Message:
+      type: object
+      properties:
+        role: { type: string, enum: [customer, agent, system, tool] }
+        content: { type: string }
+        tool_calls: { type: array, items: { type: object, additionalProperties: true }, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    PaginatedConversations:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Conversation" } }
+        pagination: { $ref: "#/components/schemas/Pagination" }
+
+    Webhook:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        target_url: { type: string, format: uri }
+        subscribed_events: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }
+
+    WebhookWithSecret:
+      allOf:
+        - $ref: "#/components/schemas/Webhook"
+        - type: object
+          properties:
+            secret: { type: string, description: "Shown once — used to verify the X-Pluto-Signature HMAC header on delivered payloads" }
+
+    ApiKey:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        prefix: { type: string, description: "First 8 chars of the key, for identification" }
+        scopes: { type: array, items: { type: string } }
+        last_used_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    ApiKeyWithSecret:
+      allOf:
+        - $ref: "#/components/schemas/ApiKey"
+        - type: object
+          properties:
+            secret: { type: string, description: "Shown once only — store it now, it cannot be retrieved again" }
+
+    Subscription:
+      type: object
+      properties:
+        plan_id: { type: string }
+        status: { type: string, enum: [trialing, active, past_due, canceled] }
+        current_period_end: { type: string, format: date-time }
+        usage:
+          type: object
+          properties:
+            call_minutes_used: { type: number }
+            call_minutes_included: { type: number }
+            sms_sent: { type: integer }
+
+    Pagination:
+      type: object
+      properties:
+        page: { type: integer }
+        page_size: { type: integer }
+        total_items: { type: integer }
+        total_pages: { type: integer }
