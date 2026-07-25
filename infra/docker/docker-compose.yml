@@ -1,0 +1,66 @@
+name: pluto-ai-dev
+
+# Local development stack — NOT used in staging/production (those run on ECS Fargate against
+# real RDS/ElastiCache/SNS-SQS, per docs/architecture/05-infra-and-observability.md). This exists
+# so engineers don't need live AWS credentials for day-to-day backend work.
+#
+# Usage: docker compose -f infra/docker/docker-compose.yml up -d
+# Then, from libs/pluto_core: alembic upgrade head
+# Then, from services/api-core: uvicorn app.main:app --reload
+
+services:
+  postgres:
+    # Official pgvector-enabled Postgres image — avoids maintaining a custom build just to add
+    # the extension (see docs/architecture/01-system-architecture.md §10 for why pgvector, not a
+    # separate vector database).
+    image: pgvector/pgvector:pg16
+    container_name: pluto-postgres
+    environment:
+      POSTGRES_DB: pluto_ai_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pluto_postgres_data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pluto_ai_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: pluto-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Emulates S3 (recordings, KB source docs), SNS, and SQS (domain event fan-out) — see
+  # docs/architecture/01-system-architecture.md §3 and §7 — so local development never touches
+  # real AWS resources.
+  localstack:
+    image: localstack/localstack:3.8
+    container_name: pluto-localstack
+    environment:
+      SERVICES: s3,sns,sqs
+      DEFAULT_REGION: us-east-1
+      PERSISTENCE: 1
+    ports:
+      - "4566:4566"
+    volumes:
+      - pluto_localstack_data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pluto_postgres_data:
+  pluto_localstack_data:

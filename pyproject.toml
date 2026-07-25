@@ -1,0 +1,31 @@
+[project]
+name = "pluto-ai-workspace"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["libs/pluto_core", "services/api-core"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# B008: FastAPI's Depends(...) is idiomatically used as an argument default — that's the
+# framework's documented pattern, not the footgun this bugbear rule targets.
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# Alembic autogenerates these; reflowing machine-generated DDL for line length isn't worth the
+# diff noise on every future `alembic revision --autogenerate`.
+"**/migrations/versions/*.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+exclude = ["migrations/"]

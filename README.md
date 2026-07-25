@@ -4,10 +4,34 @@ AI Business Operating System for SMEs — starting as an AI receptionist platfor
 SMS, web chat) with booking, CRM, and workflow automation, built as a multi-tenant SaaS with
 white-label/agency support from day one.
 
-**Status:** Phase 1 — Architecture. No application code has been written yet by design; see
-[`PROJECT_STATUS.md`](./PROJECT_STATUS.md) for exactly where things stand and
+**Status:** Phase 1 complete, Phase 2 (Core Backend) underway. Database schema + Row-Level
+Security and the authentication module are built and passing tests against a real Postgres +
+Redis. See [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) for exactly where things stand and
 [`docs/architecture/`](./docs/architecture/) for the full system design and the reasoning behind
 every major decision.
+
+## Backend quickstart
+
+```bash
+# 1. Postgres 16 + pgvector, and Redis — via infra/docker/docker-compose.yml if you have Docker,
+#    or natively (see scripts/bootstrap_local_db.sh, which is what this repo's own dev setup used)
+./scripts/bootstrap_local_db.sh
+
+# 2. Python workspace
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e libs/pluto_core -e services/api-core
+
+# 3. Migrations (schema + Row-Level Security)
+export MIGRATION_DATABASE_URL="postgresql+psycopg://<migration-role>@localhost:5432/pluto_ai_dev"
+cd libs/pluto_core && alembic upgrade head && cd ../..
+
+# 4. Run it
+cd services/api-core && uvicorn app.main:app --reload   # → http://localhost:8000/docs
+```
+
+See [`libs/pluto_core/README.md`](./libs/pluto_core/README.md) and
+[`services/api-core/README.md`](./services/api-core/README.md) for details, and
+`services/api-core/tests/` for the test suite (`pytest tests/ -v`).
 
 ## Start here
 

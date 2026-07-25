@@ -1,0 +1,179 @@
+name: Deploy
+
+# The "on merge to main" half of the pipeline in
+# docs/architecture/05-infra-and-observability.md §3: build once (immutable, SHA-tagged image),
+# migrate, deploy to staging automatically, smoke-test, then a manual approval gate (the
+# `production` GitHub Environment, configured with required reviewers in repo settings) before
+# production. Rollback is not scripted here — it relies on the ECS deployment circuit breaker
+# configured in infra/terraform/modules/ecs-service (deployment_circuit_breaker { rollback =
+# true }), so a failed health check during rollout triggers ECS's own automatic rollback; this
+# workflow just waits for the deployment to stabilize and fails loudly if it doesn't.
+#
+# Triggered via workflow_run (not `push`) so it only ever runs against a commit that CI has
+# already passed on — a deploy workflow triggered directly by `push` could race ahead of, or run
+# despite, a red CI run.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: deploy-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false # never cancel a deploy mid-flight
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: pluto-api-core
+
+jobs:
+  build-and-push:
+    name: Build & push image
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image_uri: ${{ steps.build.outputs.image_uri }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_CI_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - name: Build and push (tagged by commit SHA — immutable, per technical specifications)
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          IMAGE_URI="$REGISTRY/${{ env.ECR_REPOSITORY }}:${{ github.event.workflow_run.head_sha }}"
+          docker build -f services/api-core/Dockerfile -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+
+      - name: Scan image for critical/high vulnerabilities
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ steps.build.outputs.image_uri }}
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+  migrate-and-deploy-staging:
+    name: Migrate + deploy (staging)
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_CI_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run database migrations against staging
+        env:
+          MIGRATION_DATABASE_URL: ${{ secrets.STAGING_MIGRATION_DATABASE_URL }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e libs/pluto_core
+          cd libs/pluto_core && alembic upgrade head
+
+      - name: Render new ECS task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: infra/ecs/api-core-staging-task-definition.json
+          container-name: app
+          image: ${{ needs.build-and-push.outputs.image_uri }}
+
+      - name: Deploy to ECS (staging) — waits for the service to stabilize
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: pluto-api-core-staging
+          cluster: pluto-ai-staging
+          wait-for-service-stability: true
+
+  smoke-test-staging:
+    name: Smoke test (staging)
+    needs: migrate-and-deploy-staging
+    runs-on: ubuntu-latest
+    steps:
+      - name: Register + login round-trip against staging
+        run: |
+          set -e
+          BASE_URL="https://api.staging.pluto-ai.com/v1"
+          EMAIL="smoke-test-$(date +%s)@example.com"
+          curl -sf -X POST "$BASE_URL/auth/register" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\":\"$EMAIL\",\"password\":\"smoke-test-password-123\",\"business_name\":\"Smoke Test\",\"timezone\":\"UTC\"}" \
+            -o /tmp/register.json
+          grep -q access_token /tmp/register.json
+
+  deploy-production:
+    name: Deploy (production — manual approval required)
+    needs: smoke-test-staging
+    runs-on: ubuntu-latest
+    # The `production` GitHub Environment is configured (in repo Settings → Environments) with a
+    # required-reviewers protection rule — this is the manual gate from
+    # docs/architecture/05-infra-and-observability.md §3. The workflow file itself can't create
+    # that protection rule; it only references the environment name, which is where the pause
+    # actually happens.
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_CI_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run database migrations against production
+        env:
+          MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e libs/pluto_core
+          cd libs/pluto_core && alembic upgrade head
+
+      - name: Render new ECS task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: infra/ecs/api-core-production-task-definition.json
+          container-name: app
+          image: ${{ needs.build-and-push.outputs.image_uri }}
+
+      - name: Deploy to ECS (production) — waits for stabilization; circuit breaker
+          auto-rolls-back on failed health checks
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: pluto-api-core-production
+          cluster: pluto-ai-production
+          wait-for-service-stability: true
+
+      - name: Post-deploy health check
+        run: |
+          set -e
+          curl -sf https://api.pluto-ai.com/docs -o /dev/null

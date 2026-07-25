@@ -16,6 +16,9 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
+# --- Generated JWT keypair (dev) — regenerate locally, never commit ---
+secrets/
+
 # --- Node / Next.js ---
 node_modules/
 .next/
@@ -32,6 +35,8 @@ build/
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
+backend.hcl
+!backend.hcl.example
 crash.log
 
 # --- OS / editor ---

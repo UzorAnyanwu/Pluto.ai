@@ -1,0 +1,48 @@
+{
+  "family": "pluto-api-core-staging",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/pluto-api-core-staging-execution",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/pluto-api-core-staging-task",
+  "containerDefinitions": [
+    {
+      "name": "app",
+      "image": "PLACEHOLDER_REPLACED_BY_CI",
+      "essential": true,
+      "portMappings": [{ "containerPort": 8000, "protocol": "tcp" }],
+      "environment": [
+        { "name": "ENVIRONMENT", "value": "staging" },
+        { "name": "JWT_ISSUER", "value": "pluto-ai" },
+        { "name": "JWT_PRIVATE_KEY_PATH", "value": "/run/secrets/jwt_private_key.pem" },
+        { "name": "JWT_PUBLIC_KEY_PATH", "value": "/run/secrets/jwt_public_key.pem" }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:pluto/staging/database-url"
+        },
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:pluto/staging/redis-url"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/pluto-ai/staging/api-core",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "api-core"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/docs')\" || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 10
+      }
+    }
+  ]
+}

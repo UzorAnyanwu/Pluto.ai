@@ -1,0 +1,48 @@
+{
+  "family": "pluto-api-core-production",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/pluto-api-core-production-execution",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/pluto-api-core-production-task",
+  "containerDefinitions": [
+    {
+      "name": "app",
+      "image": "PLACEHOLDER_REPLACED_BY_CI",
+      "essential": true,
+      "portMappings": [{ "containerPort": 8000, "protocol": "tcp" }],
+      "environment": [
+        { "name": "ENVIRONMENT", "value": "production" },
+        { "name": "JWT_ISSUER", "value": "pluto-ai" },
+        { "name": "JWT_PRIVATE_KEY_PATH", "value": "/run/secrets/jwt_private_key.pem" },
+        { "name": "JWT_PUBLIC_KEY_PATH", "value": "/run/secrets/jwt_public_key.pem" }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:pluto/production/database-url"
+        },
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:pluto/production/redis-url"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/pluto-ai/production/api-core",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "api-core"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/docs')\" || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 10
+      }
+    }
+  ]
+}
