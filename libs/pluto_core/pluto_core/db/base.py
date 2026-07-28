@@ -3,20 +3,20 @@ Postgres. See docs/architecture/02-data-model.md for the reasoning behind each m
 """
 
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, func, text
+from sqlalchemy import Connection, DateTime, Integer, event, func, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, SessionTransaction, declared_attr, mapped_column
 
 from pluto_core.db.uuid7 import uuid7
 
@@ -130,27 +130,52 @@ async def dispose_engine() -> None:
     _session_factory = None
 
 
+def _tenant_context_listener(business_id: uuid.UUID) -> Callable[[Session, SessionTransaction, Connection], None]:
+    """`SET LOCAL` (what we use to set the RLS session variable) only lasts for a single Postgres
+    transaction — it does NOT survive a `commit()`. A request handler that commits and then runs
+    another query on the same session (e.g. `session.add(x); await session.commit(); await
+    session.refresh(x)`) would silently lose its tenant context on that second query, and RLS
+    would hide every row, not scope them correctly.
+
+    Rather than require every call site to remember to re-apply the session variable after every
+    commit, this listens for Session's `after_begin` — which fires for every transaction the
+    session opens for its whole lifetime, including the implicit one SQLAlchemy autobegins right
+    after a commit — and re-applies it every time. This is SQLAlchemy's own documented pattern
+    for per-transaction session variables in exactly this multi-tenant/RLS scenario.
+    """
+
+    def _listener(session: Session, transaction: SessionTransaction, connection: Connection) -> None:
+        connection.execute(
+            text("SELECT set_config('app.current_tenant', :tenant_id, true)"),
+            {"tenant_id": str(business_id)},
+        )
+
+    return _listener
+
+
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    """Yields a session with the current TenantContext's business_id already applied as the RLS
-    session variable for this transaction. Platform-level operations (no tenant context — e.g. a
-    platform_admin listing all businesses) leave `app.current_tenant` unset, which RLS policies
-    treat as "no rows visible" by design (see migrations for the exact policy), so cross-tenant
-    reads must go through an explicit platform-scoped code path, never accidentally through the
-    tenant-scoped one.
+    """Yields a session with the current TenantContext's business_id applied as the RLS session
+    variable for every transaction for the life of this session (see `_tenant_context_listener`).
+    Platform-level operations (no tenant context — e.g. a platform_admin listing all businesses)
+    leave `app.current_tenant` unset, which RLS policies treat as "no rows visible" by design
+    (see migrations for the exact policy), so cross-tenant reads must go through an explicit
+    platform-scoped code path, never accidentally through the tenant-scoped one.
     """
     if _session_factory is None:
         raise RuntimeError("Database engine not initialized — call init_engine() at service startup.")
 
     session = _session_factory()
+    ctx = get_tenant_context()
+    listener = _tenant_context_listener(ctx.business_id) if ctx is not None else None
+
+    if listener is not None:
+        event.listen(session.sync_session, "after_begin", listener)
+
     try:
-        ctx = get_tenant_context()
-        if ctx is not None:
-            await session.execute(
-                text("SELECT set_config('app.current_tenant', :tenant_id, true)"),
-                {"tenant_id": str(ctx.business_id)},
-            )
         yield session
     finally:
+        if listener is not None:
+            event.remove(session.sync_session, "after_begin", listener)
         await session.close()
 
 

@@ -12,6 +12,12 @@ be extracted into its own service later without a rewrite. See
   logout — matching the `Auth` tag in [`docs/api/openapi.yaml`](../../docs/api/openapi.yaml).
   RS256 JWT access tokens, Argon2id password hashing, Redis-backed rate limiting on
   register/login. See [`docs/architecture/04-security-and-compliance.md`](../../docs/architecture/04-security-and-compliance.md) §1.
+- **Business management** (`app/api/v1/businesses.py`): profile `GET`/`PATCH` (optimistic
+  concurrency), team `GET`/`POST`/`PATCH`/`DELETE` — the owner can never be demoted or removed,
+  enforced server-side. Phone number provisioning is **not** implemented (needs a real Twilio
+  account — see `PROJECT_STATUS.md`).
+- **AI agent config** (`app/api/v1/ai_agent_config.py`): `GET`/`PUT`, auto-creating working
+  defaults on first read. `test-call` is **not** implemented (same Twilio blocker).
 - Tenant resolution + RBAC dependencies (`app/dependencies.py`): every protected route resolves a
   `TenantContext` from the JWT before touching the database — see `libs/pluto_core`'s README for
   how that ties into Row-Level Security.
@@ -19,8 +25,9 @@ be extracted into its own service later without a rewrite. See
 
 ## Not yet implemented
 
-Everything else in `openapi.yaml` (businesses, team, AI agent config, knowledge base, calendar,
-bookings, customers, conversations, webhooks, API keys, billing) — Phase 2, Core Backend.
+Knowledge base, calendar, bookings, customers, conversations, webhooks, API keys, billing —
+Phase 2, Core Backend continues. Phone number provisioning and AI test-call are blocked on a
+Twilio account, not scheduled work.
 
 ## Local development
 

@@ -5,19 +5,15 @@ every work session — every future session should be able to read this file alo
 where things stand.
 
 ## Current Phase
-**Phase 1 complete → entering Phase 2 (Core Backend / Core Frontend / Multi-tenancy)**
+**Phase 2 — Core Backend build-out** (Phase 1 fully complete)
 
 ## Current Sprint
-Sprint 2 — Core Backend build-out (Business Management, Knowledge Base, CRM, Calendar/Bookings
-endpoints, following the `openapi.yaml` contract)
+Sprint 2 — `api-core` endpoints, following the `openapi.yaml` contract module by module
 
 ## Current Milestone
-All Phase 1 deliverables are done: architecture, product/requirements docs, database schema +
-RLS (validated against real Postgres), the authentication module (validated with a passing test
-suite), CI/CD workflows, and Terraform scaffolding (validated with `terraform validate`). Next
-milestone is building out the remaining `api-core` endpoints from `docs/api/openapi.yaml`,
-starting with Business Management (the `/businesses/me` and `/businesses/me/team` paths), since
-onboarding (`docs/product/02-user-flows.md` §1) depends on them.
+Business Management and AI Agent Config are done and tested. Next: Knowledge Base endpoints
+(the next thing onboarding needs — `docs/product/02-user-flows.md` §1), then wiring a real AWS
+account so Terraform/CI-CD stop being validated-but-unrun.
 
 ## Completed Modules
 
@@ -25,7 +21,7 @@ onboarding (`docs/product/02-user-flows.md` §1) depends on them.
 - Repository scaffolding, all 5 architecture docs (reviewed and approved), 3 product docs, and
   the validated OpenAPI 3.0.3 contract (28 paths, 28 schemas) — see `docs/`.
 
-### Phase 1 — Infrastructure, Database, Auth (this session)
+### Phase 1 — Infrastructure, Database, Auth
 - **Python workspace**: `libs/pluto_core` (shared models/security) + `services/api-core`
   (FastAPI), installed editable into a local `.venv`. Not using `uv` (see Technical Debt).
 - **Database design** (`libs/pluto_core/pluto_core/db/`): all 32 tables from
@@ -36,40 +32,59 @@ onboarding (`docs/product/02-user-flows.md` §1) depends on them.
   reviewed) + a hand-written RLS/grants migration — Row-Level Security enabled on every
   tenant-owned table, a least-privilege `pluto_app` runtime role (never the migration/owner
   role), and a `SECURITY DEFINER` function (`auth_resolve_business_by_email`) as the one narrow,
-  documented bypass the login flow needs. **Applied against and validated with a real local
-  Postgres 16 + pgvector instance** — proved directly with raw SQL (zero rows with no tenant
-  context, correct per-tenant scoping, rejected cross-tenant writes) and again through the ORM in
-  `services/api-core/tests/test_rls_isolation.py`.
-- **Auth module** (`services/api-core/app/`): register/login/refresh/logout, RS256 JWT access
-  tokens, Argon2id password hashing, refresh-token rotation with reuse detection (a replayed
-  rotated-away token revokes the whole session chain), Redis-backed rate limiting, structured
-  error responses matching `openapi.yaml`. **14/14 tests passing** against real Postgres + Redis.
+  documented bypass the login flow needs. Validated with raw SQL and through the ORM
+  (`services/api-core/tests/test_rls_isolation.py`).
+- **Auth module** (`services/api-core/app/api/v1/auth.py`): register/login/refresh/logout, RS256
+  JWT access tokens, Argon2id password hashing, refresh-token rotation with reuse detection,
+  Redis-backed rate limiting, structured error responses matching `openapi.yaml`.
 - **CI/CD** (`.github/workflows/`): `ci.yml` (lint, type-check, test w/ service containers,
   dependency scan, Terraform plan-on-PR) and `deploy.yml` (build/scan/push → migrate → staging →
   smoke test → manual-approval-gated production, circuit-breaker rollback). Not yet run in GitHub
   Actions (needs AWS infra + secrets that don't exist yet) — YAML validated, logic reviewed.
 - **Terraform** (`infra/terraform/`): 10 modules (vpc, ecs-cluster, ecs-service, alb,
   rds-postgres, elasticache-redis, s3-bucket, sns-sqs, ecr-repository) + the `dev` environment
-  composition. **`terraform validate` passes clean.** `plan`/`apply` not run — no AWS account
-  wired up yet (see `infra/terraform/global`'s README for the blocker).
+  composition. `terraform validate` passes clean. `plan`/`apply` not run — no AWS account wired
+  up yet (see `infra/terraform/global`'s README for the blocker).
 - **Docker**: `services/api-core/Dockerfile` + `infra/docker/docker-compose.yml` written, not
   exercised end-to-end (no Docker on this machine — see `infra/docker/README.md`).
+
+### Phase 2 — Core Backend (this session)
+- **Business Management** (`services/api-core/app/api/v1/businesses.py`): `GET`/`PATCH
+  /businesses/me` (optimistic concurrency via `version`), full team management (`GET`/`POST
+  /businesses/me/team`, `PATCH`/`DELETE /businesses/me/team/{userId}`) with the owner-can-never-
+  be-demoted-or-removed rule enforced server-side, not just documented.
+- **AI Agent Config** (`services/api-core/app/api/v1/ai_agent_config.py`): `GET`/`PUT
+  /businesses/me/ai-agent-config`, auto-creating a working-defaults row on first read so the AI
+  is usable in a degraded mode before an owner configures anything, matching the onboarding flow.
+- **26/26 tests passing** against real Postgres + Redis (up from 14) — this pass caught and fixed
+  a real bug: `SET LOCAL` (how the RLS tenant variable is set) doesn't survive a `commit()`, so
+  any handler that commits and then queries again (e.g. `db.refresh()` after creating a row)
+  silently lost its tenant context and got zero rows back from RLS. Fixed systemically in
+  `pluto_core/db/base.py` via a `Session.after_begin` event listener that re-applies the tenant
+  variable on every transaction the session opens, not just the first — not a per-call-site patch.
+- **`phone-number` provisioning and `test-call` endpoints are not implemented** — both need a
+  real Twilio account/credentials this environment doesn't have. Documented in
+  `services/api-core/app/api/v1/` (no stub code committed for them — see Technical Debt).
 
 ## Outstanding Tasks
 
 ### Immediate next (Phase 2, Sprint 2)
-- [ ] Business Management endpoints (`/businesses/me`, `/businesses/me/phone-number`,
-      `/businesses/me/team`) — unblocks the onboarding flow
-- [ ] AI Agent Config endpoints
+- [ ] Knowledge Base endpoints (`/businesses/me/knowledge-sources`) — file upload handling +
+      async indexing status is new complexity this repo hasn't dealt with yet (needs an object
+      storage client and a background task, not just a DB write)
 - [ ] Wire real AWS account: `infra/terraform/global` (Route53, ACM, GitHub OIDC roles), then
       `environments/dev` can actually `plan`/`apply`
 - [ ] Run `.github/workflows/ci.yml` for real once pushed (first real signal on whether the
       service-container/Postgres+pgvector setup works in GitHub's runners, not just locally)
 
 ### Carried over, not urgent
-- [ ] Knowledge Base, CRM, Calendar/Bookings, Webhooks, API Keys, Billing endpoints
+- [ ] CRM (customers/conversations), Calendar/Bookings, Webhooks, API Keys, Billing endpoints
+- [ ] Phone number provisioning + AI test-call (`app/api/v1/businesses.py` /
+      `ai_agent_config.py`) — blocked on a real Twilio account
 - [ ] `services/workers` (Celery) — needed before the SNS/SQS `domain_events` topic gets its
-      first real consumer
+      first real consumer, and before Knowledge Base indexing can run asynchronously
+- [ ] Team invite acceptance flow (set a real password) — invited members currently get an
+      unusable placeholder password with no way to activate the account; needs outbound email
 
 ## Not Started (Phase 2+, remainder)
 Core Frontend · AI Engine · Voice Engine · Analytics · Agency Features · White-label · Admin
@@ -98,13 +113,20 @@ Panel · Enterprise Features · Performance/Security hardening · Production Dep
   (not a DB constraint — the schema allows the same email across different businesses, per the
   data model doc), so no multi-workspace-per-email UX exists yet. Documented in
   `services/api-core/app/api/v1/auth.py`.
+- **Team invites create an unusable account, not a working invite flow** — no email is sent and
+  there's no accept-invite endpoint to set a real password. See `businesses.py`'s
+  `invite_team_member`.
+- **Phone number provisioning and AI test-call are unimplemented**, not stubbed — blocked on a
+  real Twilio account. The `openapi.yaml` contract for these two endpoints stands; building them
+  against fake/mocked Twilio responses was deliberately avoided so as not to ship untested
+  integration code.
 
 ## Key Decisions Log
 See `docs/architecture/01-system-architecture.md` §3–10 for the full reasoning on 1–8. Quick index:
 1. Modular monolith (`api-core`) + day-1 extraction of `voice-gateway` and `workers` — not full
    microservices, not a single undifferentiated monolith.
 2. Multi-tenancy: shared schema + `business_id` + Postgres RLS — not database-per-tenant.
-   **Implemented and validated this session** — see `libs/pluto_core/migrations/rls_helpers.py`.
+   **Implemented and validated** — see `libs/pluto_core/migrations/rls_helpers.py`.
 3. Event backbone: SNS/SQS for cross-service domain events — Kafka deferred until volume justifies it.
 4. All tenant-owned primary keys: UUIDv7. **Implemented** — `pluto_core/db/uuid7.py`.
 5. Compute: ECS Fargate — EKS deferred until a concrete need (portability or Fargate limits) appears.
@@ -129,3 +151,8 @@ See `docs/architecture/01-system-architecture.md` §3–10 for the full reasonin
     non-owner, non-superuser role automatically, which is what lets a single `SECURITY DEFINER`
     function (owned by the migration role) serve as a narrow, intentional login-lookup bypass
     without needing `FORCE ROW LEVEL SECURITY` anywhere. See `rls_helpers.py`.
+14. **RLS tenant context is re-applied on every transaction, not just session start** — `SET
+    LOCAL` doesn't survive a `commit()`, so a `Session.after_begin` event listener re-issues it
+    for every transaction the session opens (including the implicit one after a commit). Found
+    by a real test failure (`db.refresh()` after `commit()` returning zero rows). See
+    `pluto_core/db/base.py`'s `_tenant_context_listener`.
