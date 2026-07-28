@@ -18,6 +18,10 @@ be extracted into its own service later without a rewrite. See
   account — see `PROJECT_STATUS.md`).
 - **AI agent config** (`app/api/v1/ai_agent_config.py`): `GET`/`PUT`, auto-creating working
   defaults on first read. `test-call` is **not** implemented (same Twilio blocker).
+- **Customers (CRM)** (`app/api/v1/customers.py`): search/filter/paginated list, detail, tag and
+  custom-field updates. No creation endpoint by design — see the module's docstring.
+- **Webhooks** and **API Keys** (`app/api/v1/webhooks.py`, `app/api/v1/api_keys.py`): full CRUD,
+  secrets shown once and SHA-256-hashed at rest.
 - Tenant resolution + RBAC dependencies (`app/dependencies.py`): every protected route resolves a
   `TenantContext` from the JWT before touching the database — see `libs/pluto_core`'s README for
   how that ties into Row-Level Security.
@@ -25,9 +29,11 @@ be extracted into its own service later without a rewrite. See
 
 ## Not yet implemented
 
-Knowledge base, calendar, bookings, customers, conversations, webhooks, API keys, billing —
-Phase 2, Core Backend continues. Phone number provisioning and AI test-call are blocked on a
-Twilio account, not scheduled work.
+Calendar, bookings (and their prerequisite Services/Employees/Locations, missing from
+`openapi.yaml`), conversations, billing — Phase 2, Core Backend continues. Knowledge base is
+blocked on an embeddings API key; phone number provisioning and AI test-call are blocked on a
+Twilio account — see `PROJECT_STATUS.md`'s Technical Debt for why those were left undone rather
+than stubbed.
 
 ## Local development
 

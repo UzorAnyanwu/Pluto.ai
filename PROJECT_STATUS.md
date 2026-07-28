@@ -11,9 +11,12 @@ where things stand.
 Sprint 2 — `api-core` endpoints, following the `openapi.yaml` contract module by module
 
 ## Current Milestone
-Business Management and AI Agent Config are done and tested. Next: Knowledge Base endpoints
-(the next thing onboarding needs — `docs/product/02-user-flows.md` §1), then wiring a real AWS
-account so Terraform/CI-CD stop being validated-but-unrun.
+Business Management, AI Agent Config, Customers (CRM), Webhooks, and API Keys are done and
+tested. Knowledge Base is intentionally skipped for now — real ingestion needs an embeddings API
+key this environment doesn't have, the same class of gap as Twilio (see Technical Debt). Next up
+without an external-credential blocker: Calendar/Bookings (needs Services/Employees/Locations
+endpoints first — not yet in `openapi.yaml`, a spec gap to fix), or wiring a real AWS account so
+Terraform/CI-CD stop being validated-but-unrun.
 
 ## Completed Modules
 
@@ -65,24 +68,40 @@ account so Terraform/CI-CD stop being validated-but-unrun.
 - **`phone-number` provisioning and `test-call` endpoints are not implemented** — both need a
   real Twilio account/credentials this environment doesn't have. Documented in
   `services/api-core/app/api/v1/` (no stub code committed for them — see Technical Debt).
+- **Customers (CRM)** (`app/api/v1/customers.py`): search/filter/paginate list, detail (with
+  linked conversation/booking IDs), tag/custom-field updates. No `POST` — customers are created as
+  a side effect of a conversation (not built yet), so tests seed rows directly via
+  `pluto_core.db.base.session_scope`, which is also a legitimate pattern for any future endpoint
+  whose only current data source is a pipeline that doesn't exist yet.
+- **Webhooks** (`app/api/v1/webhooks.py`) and **API Keys** (`app/api/v1/api_keys.py`): full CRUD,
+  HMAC/bearer secrets generated via a new generic `pluto_core.security.secrets` helper, shown
+  once on creation, SHA-256-hashed at rest. Webhook delivery itself (the background job that
+  actually POSTs to `target_url`) is `services/workers` — not built.
+- **42/42 tests passing** against real Postgres + Redis (up from 26).
 
 ## Outstanding Tasks
 
 ### Immediate next (Phase 2, Sprint 2)
-- [ ] Knowledge Base endpoints (`/businesses/me/knowledge-sources`) — file upload handling +
-      async indexing status is new complexity this repo hasn't dealt with yet (needs an object
-      storage client and a background task, not just a DB write)
+- [ ] Fix an `openapi.yaml` gap found this session: `Bookings` references `service_id`/
+      `employee_id`/`location_id`, but there are no `Services`/`Employees`/`Locations` endpoints
+      in the contract to create them — needed before Bookings endpoints are buildable/testable
+      through the API (not just via direct DB seeding).
 - [ ] Wire real AWS account: `infra/terraform/global` (Route53, ACM, GitHub OIDC roles), then
       `environments/dev` can actually `plan`/`apply`
 - [ ] Run `.github/workflows/ci.yml` for real once pushed (first real signal on whether the
       service-container/Postgres+pgvector setup works in GitHub's runners, not just locally)
 
 ### Carried over, not urgent
-- [ ] CRM (customers/conversations), Calendar/Bookings, Webhooks, API Keys, Billing endpoints
+- [ ] Knowledge Base endpoints — blocked on an embeddings API key (OpenAI/Anthropic/Gemini),
+      same class of gap as Twilio; see Technical Debt
+- [ ] Conversations endpoints (list/detail) — populated by the voice/AI pipeline, not built yet;
+      buildable now as read-only endpoints over an always-empty table, low value until then
+- [ ] Services/Employees/Locations, Calendar connections, Bookings, Billing endpoints
 - [ ] Phone number provisioning + AI test-call (`app/api/v1/businesses.py` /
       `ai_agent_config.py`) — blocked on a real Twilio account
 - [ ] `services/workers` (Celery) — needed before the SNS/SQS `domain_events` topic gets its
-      first real consumer, and before Knowledge Base indexing can run asynchronously
+      first real consumer, webhook delivery can run, and Knowledge Base indexing can run
+      asynchronously
 - [ ] Team invite acceptance flow (set a real password) — invited members currently get an
       unusable placeholder password with no way to activate the account; needs outbound email
 
@@ -120,6 +139,15 @@ Panel · Enterprise Features · Performance/Security hardening · Production Dep
   real Twilio account. The `openapi.yaml` contract for these two endpoints stands; building them
   against fake/mocked Twilio responses was deliberately avoided so as not to ship untested
   integration code.
+- **Knowledge Base ingestion is unimplemented for the same reason**: extraction and chunking
+  need no external API, but the whole point of the pipeline is populating `knowledge_chunks.embedding`
+  (`NOT NULL`), which needs a real call to an embeddings API (OpenAI/Anthropic/Gemini) this
+  environment has no credentials for. Building source upload/list/delete without the ability to
+  ever move a source to `ready` would ship a feature that looks done and isn't.
+- **`openapi.yaml` has no `Services`/`Employees`/`Locations` endpoints**, discovered while
+  scoping Bookings — `Booking.service_id`/`employee_id`/`location_id` are real foreign keys with
+  no API-level way to create the rows they point to. Needs a small spec addition before Bookings
+  endpoints are worth building.
 
 ## Key Decisions Log
 See `docs/architecture/01-system-architecture.md` §3–10 for the full reasoning on 1–8. Quick index:
