@@ -13,10 +13,19 @@ Sprint 2 — `api-core` endpoints, following the `openapi.yaml` contract module 
 ## Current Milestone
 Business Management, AI Agent Config, Customers (CRM), Webhooks, and API Keys are done and
 tested. Knowledge Base is intentionally skipped for now — real ingestion needs an embeddings API
-key this environment doesn't have, the same class of gap as Twilio (see Technical Debt). Next up
-without an external-credential blocker: Calendar/Bookings (needs Services/Employees/Locations
-endpoints first — not yet in `openapi.yaml`, a spec gap to fix), or wiring a real AWS account so
-Terraform/CI-CD stop being validated-but-unrun.
+key this environment doesn't have, the same class of gap as Twilio (see Technical Debt). The repo
+is now pushed to GitHub (`https://github.com/UzorAnyanwu/Pluto.ai`), and a Render deployment is in
+progress as a staging/validation step (AWS/Terraform remains the documented production-track
+path — see Key Decisions Log). Next up: finish the Render Blueprint, then Calendar/Bookings (needs
+Services/Employees/Locations endpoints first — not yet in `openapi.yaml`, a spec gap to fix).
+
+## Repository
+Pushed to `https://github.com/UzorAnyanwu/Pluto.ai` (main branch). Note: `apps/web` now contains
+two things merged via `git subtree add` from a pre-existing history on that remote — a real,
+AI-Studio-generated marketing landing page (Vite/React/Express, calling Gemini server-side) that
+predates this session's architecture work. It is **not** the planned Next.js dashboard from
+`docs/architecture/01-system-architecture.md` §6/§8 — see `apps/web/README.md` for the open
+decision on how to reconcile the two (not resolved yet, flagged not guessed at).
 
 ## Completed Modules
 
@@ -106,8 +115,10 @@ Terraform/CI-CD stop being validated-but-unrun.
       unusable placeholder password with no way to activate the account; needs outbound email
 
 ## Not Started (Phase 2+, remainder)
-Core Frontend · AI Engine · Voice Engine · Analytics · Agency Features · White-label · Admin
-Panel · Enterprise Features · Performance/Security hardening · Production Deployment
+Core Frontend (the planned Next.js tenant/agency/admin dashboard — `apps/web` currently holds an
+unrelated marketing landing page, see Repository above, not the dashboard) · AI Engine · Voice
+Engine · Analytics · Agency Features · White-label · Admin Panel · Enterprise Features ·
+Performance/Security hardening · Production Deployment
 
 ## Technical Debt
 - `apps/admin` and `apps/agency` are placeholder directories pending a final decision on the
