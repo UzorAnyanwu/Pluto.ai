@@ -1,0 +1,6 @@
+{
+  "name": "Pluto AI",
+  "description": "An interactive landing page and sandbox for Pluto AI, the premium AI receptionist built for small and medium businesses to handle inquiries, bookings, and customer support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
