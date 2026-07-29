@@ -14,9 +14,12 @@ Sprint 2 — `api-core` endpoints, following the `openapi.yaml` contract module 
 Business Management, AI Agent Config, Customers (CRM), Webhooks, and API Keys are done and
 tested. Knowledge Base is intentionally skipped for now — real ingestion needs an embeddings API
 key this environment doesn't have, the same class of gap as Twilio (see Technical Debt). The repo
-is now pushed to GitHub (`https://github.com/UzorAnyanwu/Pluto.ai`), and a Render deployment is in
-progress as a staging/validation step (AWS/Terraform remains the documented production-track
-path — see Key Decisions Log). Next up: finish the Render Blueprint, then Calendar/Bookings (needs
+is pushed to GitHub, and `render.yaml` + `.github/workflows/deploy-render.yml` are written and
+validated for a Render staging deployment (AWS/Terraform remains the documented production-track
+path — see Key Decisions Log). **Not yet actually deployed** — the Render Blueprint sync and
+secret-file setup are dashboard steps only the account owner can do; see
+`infra/render/POST_PROVISIONING.md` for the exact checklist. Next up once that's live: verify the
+smoke test in that checklist passes for real, then Calendar/Bookings (needs
 Services/Employees/Locations endpoints first — not yet in `openapi.yaml`, a spec gap to fix).
 
 ## Repository
@@ -87,6 +90,18 @@ decision on how to reconcile the two (not resolved yet, flagged not guessed at).
   once on creation, SHA-256-hashed at rest. Webhook delivery itself (the background job that
   actually POSTs to `target_url`) is `services/workers` — not built.
 - **42/42 tests passing** against real Postgres + Redis (up from 26).
+
+### Render staging deployment (this session)
+- `render.yaml` — Blueprint provisioning `pluto-api-core` (Docker web service), managed Postgres
+  (pgvector), and managed Redis. `autoDeploy: false` deliberately, so deploys still only happen
+  after `.github/workflows/deploy-render.yml` confirms `CI` passed — the same gate the AWS path
+  (`deploy.yml`) has, not weakened just because the platform changed.
+- Fixed two real bugs found while making this deployable (see Key Decisions Log #15/#16):
+  managed-Postgres URL scheme normalization, and the Dockerfile not shipping `migrations/` at
+  all, which would have made `alembic upgrade head` impossible inside the deployed container.
+- Full one-time setup checklist in `infra/render/POST_PROVISIONING.md` (Blueprint sync, secret
+  file contents, deploy hook wiring, optional custom domain, and the documented single-DB-role
+  simplification vs. the real two-role security model).
 
 ## Outstanding Tasks
 
@@ -159,6 +174,14 @@ Performance/Security hardening · Production Deployment
   scoping Bookings — `Booking.service_id`/`employee_id`/`location_id` are real foreign keys with
   no API-level way to create the rows they point to. Needs a small spec addition before Bookings
   endpoints are worth building.
+- **Render staging deployment uses one DB role for both migrations and the app**, not the real
+  least-privilege `pluto_app`/migration-role split (`libs/pluto_core/migrations/rls_helpers.py`)
+  — Render provisions one admin user per database by default. Documented with a fix procedure in
+  `infra/render/POST_PROVISIONING.md` §5; deliberately not solved automatically since it needs
+  real credentials only the account owner has.
+- **`apps/web` is a marketing landing page, not the planned Next.js dashboard** — merged from a
+  pre-existing GitHub history (see Repository section above). Reconciling the two is an open,
+  unresolved decision — see `apps/web/README.md`.
 
 ## Key Decisions Log
 See `docs/architecture/01-system-architecture.md` §3–10 for the full reasoning on 1–8. Quick index:
@@ -195,3 +218,19 @@ See `docs/architecture/01-system-architecture.md` §3–10 for the full reasonin
     for every transaction the session opens (including the implicit one after a commit). Found
     by a real test failure (`db.refresh()` after `commit()` returning zero rows). See
     `pluto_core/db/base.py`'s `_tenant_context_listener`.
+15. **Chose Render over AWS for the first real deployment, deliberately as a staging/validation
+    step, not a replacement.** AWS/Terraform remains the documented production-track path — the
+    SNS/SQS event backbone (Decision 3) and `voice-gateway`'s call-affinity scaling (Decision 5/7)
+    have no Render equivalent. Render wins right now on setup friction and cost for proving the
+    app deploys/migrates/runs for real, with nothing built against AWS being wasted — it just
+    isn't validated by this step.
+16. **Database connection URLs are normalized in code, not assumed pre-formatted** — managed
+    Postgres providers (Render, RDS via Secrets Manager, Neon, ...) hand out a bare
+    `postgresql://` string with no notion of which SQLAlchemy driver we want. `pluto_core.config`
+    now rewrites this to `postgresql+asyncpg://` (app) / `postgresql+psycopg://` (migrations)
+    automatically, so the same settings code works unmodified across every deploy target.
+17. **The initial Alembic migration is self-contained**: it creates the pgvector extension itself
+    (previously only done by `scripts/bootstrap_local_db.sh`/`infra/docker/init-db.sh`) and its
+    `downgrade()` explicitly drops all 19 Postgres ENUM types the schema created — Alembic's
+    autogenerate doesn't do this for you, and running the actual up→down→up cycle (not just
+    `upgrade` alone) surfaced it as a real failure the first time it was actually run end-to-end.

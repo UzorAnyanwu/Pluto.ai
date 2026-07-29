@@ -1,0 +1,85 @@
+# Render Blueprint — provisions a staging/validation deployment of services/api-core.
+#
+# This is explicitly NOT the production infrastructure target: infra/terraform/ (AWS) remains the
+# documented production-track path (see PROJECT_STATUS.md's Key Decisions Log — the SNS/SQS event
+# backbone and voice-gateway's call-affinity scaling have no Render equivalent). This Blueprint
+# exists to prove the app deploys, migrates, and runs for real — quickly and cheaply — while that
+# AWS path is built out separately.
+#
+# Apply via the Render dashboard: New -> Blueprint -> select this repo (main branch). Render
+# auto-detects this file. A few things below are deliberately left for the dashboard rather than
+# encoded here — see the comments at each point, and infra/render/POST_PROVISIONING.md for the
+# full one-time checklist after the first sync.
+
+databases:
+  - name: pluto-ai-db
+    databaseName: pluto_ai
+    plan: starter
+    region: oregon
+    postgresMajorVersion: "16"
+    # pgvector: the Alembic migration itself runs `CREATE EXTENSION IF NOT EXISTS vector` (see
+    # libs/pluto_core/migrations/versions/71b28bb643db_initial_schema.py), so nothing extra is
+    # needed here beyond Render Postgres supporting the extension, which it does.
+
+services:
+  - type: redis
+    name: pluto-ai-redis
+    plan: starter
+    region: oregon
+    ipAllowList: [] # empty = only reachable from other services in this Render account/project
+
+  - type: web
+    name: pluto-api-core
+    runtime: docker
+    dockerfilePath: ./services/api-core/Dockerfile
+    dockerContext: .
+    plan: starter
+    region: oregon
+    branch: main
+    healthCheckPath: /docs
+    # Render's default is to deploy on every push to `branch`, independent of our own CI status —
+    # that would defeat the "only deploy if tests pass" gate this project has used throughout
+    # (see .github/workflows/deploy.yml's AWS path). Disabled here; deploys are instead triggered
+    # by .github/workflows/deploy-render.yml calling this service's Deploy Hook URL, but only
+    # after the CI workflow (lint/type-check/test/scan) has passed.
+    autoDeploy: false
+    # Runs before each new instance starts serving, using the same image, so `alembic upgrade
+    # head` always runs against the version of the schema this exact deploy expects. See
+    # services/api-core/Dockerfile for why /app/db exists (migrations aren't included in the
+    # runtime image by default — the image only needs them for this command to work).
+    preDeployCommand: "cd /app/db && alembic upgrade head"
+    envVars:
+      - key: ENVIRONMENT
+        value: staging
+      - key: JWT_ISSUER
+        value: pluto-ai
+      - key: JWT_PRIVATE_KEY_PATH
+        value: /etc/secrets/jwt_private_key.pem
+      - key: JWT_PUBLIC_KEY_PATH
+        value: /etc/secrets/jwt_public_key.pem
+      # Both point at the same Render-managed Postgres admin connection. This is a deliberate,
+      # documented simplification for this staging deployment ONLY: the real security model
+      # (libs/pluto_core/migrations/rls_helpers.py) uses a separate least-privilege `pluto_app`
+      # role for the app connection, distinct from the migration/owner role — Render's default
+      # Postgres gives one admin user per database, not two. See
+      # infra/render/POST_PROVISIONING.md for how to close this gap if this deployment needs to
+      # be more than a validation step.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: pluto-ai-db
+          property: connectionString
+      - key: MIGRATION_DATABASE_URL
+        fromDatabase:
+          name: pluto-ai-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: pluto-ai-redis
+          property: connectionString
+    # Secret file *contents* are never written here (this file is public in the repo) — declaring
+    # the name creates a placeholder that must be filled in via the Render dashboard after the
+    # first Blueprint sync. See infra/render/POST_PROVISIONING.md.
+    secretFiles:
+      - name: jwt_private_key.pem
+      - name: jwt_public_key.pem

@@ -28,6 +28,15 @@ RUN groupadd --system pluto && useradd --system --gid pluto --no-create-home plu
 COPY --from=builder /install /usr/local
 COPY --from=builder /build/services/api-core/app /app/app
 
+# Alembic config + migrations, preserved as siblings (alembic.ini's `script_location = migrations`
+# resolves relative to the current working directory, matching how migrations are run locally —
+# `cd libs/pluto_core && alembic upgrade head`, see libs/pluto_core/README.md). Without this, the
+# image can serve requests but has no way to run `alembic upgrade head` against itself — needed
+# for any platform (Render's pre-deploy command, an ECS one-off task, etc.) that runs migrations
+# from inside the deployed image rather than a separate CI step.
+COPY --from=builder /build/libs/pluto_core/alembic.ini /app/db/alembic.ini
+COPY --from=builder /build/libs/pluto_core/migrations /app/db/migrations
+
 WORKDIR /app
 USER pluto
 

@@ -1,0 +1,29 @@
+name: Deploy (Render staging)
+
+# Render deployment for the staging/validation step documented in PROJECT_STATUS.md and
+# render.yaml — deliberately separate from deploy.yml (the AWS/ECS production-track path), not a
+# replacement for it. Triggered the same way deploy.yml is: only after the CI workflow has
+# actually passed on main, never directly on push (render.yaml sets `autoDeploy: false` for
+# exactly this reason — Render's own default would ignore our test results entirely).
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: deploy-render-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  trigger-render-deploy:
+    name: Trigger Render deploy hook
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST to the Render deploy hook
+        run: |
+          set -e
+          response=$(curl -sf -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}")
+          echo "$response"
